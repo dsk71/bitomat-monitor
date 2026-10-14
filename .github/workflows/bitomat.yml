@@ -1,0 +1,55 @@
+# Plik musi być w repozytorium pod ścieżką: .github/workflows/bitomat.yml
+name: Bitomat monitor
+
+on:
+  schedule:
+    - cron: "17 * * * *"      # ZAPASOWO co godzinę; główny rytm nadaje cron-job.org
+  workflow_dispatch: {}        # wywoływane przez cron-job.org (i ręcznie przyciskiem)
+
+permissions:
+  contents: write              # zapis plików stanu i historii do repo
+
+concurrency:
+  group: bitomat
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Pobierz repozytorium
+        uses: actions/checkout@v5
+
+      - name: Zainstaluj Pythona
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Zainstaluj zależności
+        run: pip install requests
+
+      - name: Sprawdź bitomat
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bitomat_monitor.py --once
+
+      - name: Zapisz stan i historię do repozytorium
+        run: |
+          git config user.name "bitomat-bot"
+          git config user.email "actions@users.noreply.github.com"
+          for f in bitomat_state.json bitomat_history.csv bitomat_fees.csv; do
+            [ -f "$f" ] && git add "$f"
+          done
+          git diff --cached --quiet && exit 0
+          git commit -m "pomiar bitomatu"
+          for i in 1 2 3 4 5; do
+            git push && exit 0
+            echo "Push nieudany (próba $i/5) — czekam 10 s i ponawiam..."
+            sleep 10
+            git pull --rebase || true
+          done
+          echo "::warning::Nie udało się zapisać pomiaru po 5 próbach. Zostanie nadrobiony przy kolejnym uruchomieniu."
+          exit 0
