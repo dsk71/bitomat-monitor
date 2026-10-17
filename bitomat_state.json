@@ -9,16 +9,16 @@
     },
     "1186": {
       "online": true,
-      "pln": 48500.0,
+      "pln": 45300.0,
       "cash_available": true,
-      "since": "2026-10-17T17:01:02.682639+02:00",
+      "since": "2026-10-17T18:10:28.463539+02:00",
       "low_alerted": false
     },
     "1764": {
       "online": true,
-      "pln": 41800.0,
+      "pln": 36800.0,
       "cash_available": true,
-      "since": "2026-10-17T16:50:27.285873+02:00",
+      "since": "2026-10-17T18:10:28.463539+02:00",
       "low_alerted": false
     }
   },
