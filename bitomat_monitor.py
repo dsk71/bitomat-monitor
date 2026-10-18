@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bitomat Monitor v5 — Wrocław
+Bitomat Monitor v6 — Wrocław
 ============================
 Monitoruje stan gotówki (PLN) w wybranych bitomatach sieci Shitcoins Club
 (bitomat.com) i wysyła powiadomienia na Telegrama i/lub Discorda.
@@ -15,7 +15,9 @@ Funkcje:
   • Poranny raport (DAILY_BRIEF_HOUR): stan maszyn, prowizje USDC/USDT,
     statystyki z ostatnich 7 dni policzone z historii CSV (liczba zasileń,
     ostatnie zasilenie, % czasu z gotówką).
-  • Wykrywanie PROMOCJI — alert, gdy prowizja sprzedaży USDC spadnie poniżej progu.
+  • "WARTO SPRZEDAWAĆ" — alert, gdy efektywna prowizja sprzedaży USDC spadnie do
+    5% (💸) lub 2,5% (🔥), niezależnie od stanu gotówki; cichy sygnał, gdy okno się
+    zamknie; werdykt + zakres z 7 dni w porannym raporcie.
   • Historia pomiarów (bitomat_history.csv) i prowizji (bitomat_fees.csv).
   • Ostrzeżenie po serii nieudanych pobrań API; ciche komunikaty serwisowe.
 
@@ -90,9 +92,14 @@ DAILY_BRIEF_HOUR = 11
 DAILY_BRIEF_SILENT = True        # True = bez dźwięku (dźwięk mają tylko alerty o gotówce)
 STATS_DAYS = 7                   # okno statystyk w porannym raporcie
 
-# PROMOCJA: głośny alert, gdy prowizja sprzedaży USDC (Twoja sprzedaż) spadnie
-# poniżej tej wartości w %. Operator robi czasem 0% przy pustych maszynach.
-PROMO_FEE_PCT = 1.0
+# "WARTO SPRZEDAWAĆ": alert, gdy EFEKTYWNA prowizja sprzedaży FEE_COIN spadnie
+# do/poniżej któregoś z progów (w %). Każdy próg alarmuje osobno, raz na epizod:
+#   5,0 → 💸 "warto sprzedawać",  2,5 → 🔥 "bardzo tanio".
+# Obserwowany zakres w tej sieci to ok. 2–8%, więc 5% to realnie "dolna połowa".
+FEE_COIN = "USDC"                # śledzona moneta: "USDC" lub "USDT"
+FEE_ALERT_LEVELS = [5.0, 2.5]
+FEE_HYSTERESIS = 0.5             # próg "odwołuje się" dopiero, gdy prowizja wzrośnie o tyle p.p. ponad niego
+FEE_QUIET_HOURS = (23, 8)        # w tych godzinach (czas PL) alert o prowizji przychodzi PO CICHU; None = zawsze głośno
 
 # Po ilu NIEUDANYCH pobraniach API z rzędu wysłać ostrzeżenie o awarii monitora
 API_FAIL_ALERT_AFTER = 5
@@ -119,7 +126,7 @@ logging.basicConfig(
 log = logging.getLogger("bitomat")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BitomatMonitor/5.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BitomatMonitor/6.0",
     "Accept": "application/json",
 }
 PL_WEEKDAYS = ["pn", "wt", "śr", "cz", "pt", "so", "nd"]
@@ -496,7 +503,71 @@ def stats_lines(stats: dict[int, dict], days: int) -> list[str]:
     return lines
 
 
+def fee_history_stats(days: int) -> dict | None:
+    """Min/max/mediana efektywnej prowizji sprzedaży FEE_COIN z bitomat_fees.csv
+    w ostatnich `days` dniach (jeden odczyt na znacznik czasu — cennik jest wspólny)."""
+    if not FEES_FILE.exists():
+        return None
+    col = f"{FEE_COIN.lower()}_prow_sprzedaz_pct"
+    cutoff = now_local() - timedelta(days=days)
+    vals, seen = [], set()
+    with FEES_FILE.open(encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            try:
+                ts = datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+            except (KeyError, ValueError):
+                continue
+            if ts < cutoff or r["timestamp"] in seen or r.get(col) in (None, ""):
+                continue
+            seen.add(r["timestamp"])
+            try:
+                vals.append(float(r[col]))
+            except ValueError:
+                continue
+    if not vals:
+        return None
+    vals.sort()
+    return {"min": vals[0], "max": vals[-1], "median": vals[len(vals) // 2], "n": len(vals)}
+
+
+def fee_range_line(days: int) -> str | None:
+    fs = fee_history_stats(days)
+    if not fs:
+        return None
+    return (f"📊 Prowizja {FEE_COIN} ost. {days} dni: {fmt_pct(fs['min'])}–{fmt_pct(fs['max'])}"
+            f" (mediana {fmt_pct(fs['median'])})")
+
+
 # ─────────────────────────────── Logika ────────────────────────────────────
+
+def current_fees(watched: dict, market: dict) -> dict[str, dict]:
+    """Cennik jest wspólny dla całej sieci — bierze pierwszy obserwowany bitomat z cenami."""
+    for atm_id in ATM_IDS:
+        f = fees(watched.get(atm_id), market)
+        if f:
+            return f
+    return {}
+
+
+def fee_verdict(fee: float | None) -> str:
+    """Jednozdaniowa ocena prowizji do porannego raportu."""
+    if fee is None:
+        return "❔ Prowizja nieznana (brak kursu rynkowego)"
+    low, high = min(FEE_ALERT_LEVELS), max(FEE_ALERT_LEVELS)
+    if fee <= low:
+        return f"🔥 BARDZO TANIO — warto sprzedawać ({fmt_pct(fee)} ≤ {fmt_pct(low)})"
+    if fee <= high:
+        return f"✅ Warto sprzedawać ({fmt_pct(fee)} ≤ {fmt_pct(high)})"
+    return f"⛔ Drogo — lepiej poczekać ({fmt_pct(fee)} > {fmt_pct(high)})"
+
+
+def is_quiet_hour(now: datetime) -> bool:
+    if not FEE_QUIET_HOURS:
+        return False
+    start, end = FEE_QUIET_HOURS
+    h = now.hour
+    return (h >= start or h < end) if start > end else (start <= h < end)
+
 
 def daily_brief(state: dict, watched: dict, market: dict) -> str | None:
     if DAILY_BRIEF_HOUR is None:
@@ -525,6 +596,10 @@ def daily_brief(state: dict, watched: dict, market: dict) -> str | None:
             if market:
                 lines.append(f"📈 Rynek: USDC {fmt_rate(market.get('USDC'))} • "
                              f"USDT {fmt_rate(market.get('USDT'))} ({market.get('_src')})")
+            lines.append(fee_verdict((f.get(FEE_COIN) or {}).get("sell_fee")))
+            rng = fee_range_line(STATS_DAYS)
+            if rng:
+                lines.append(rng)
             break
 
     stats = history_stats(STATS_DAYS)
@@ -535,26 +610,57 @@ def daily_brief(state: dict, watched: dict, market: dict) -> str | None:
     return "\n".join(lines)
 
 
-def promo_message(state: dict, watched: dict, market: dict) -> str | None:
-    """Alert, gdy prowizja sprzedaży USDC spadnie poniżej PROMO_FEE_PCT (raz na promocję)."""
-    if not market:
-        return None
-    hits = []
-    for atm_id in ATM_IDS:
-        f = fees(watched.get(atm_id), market).get("USDC") or {}
-        if f.get("sell_fee") is not None and f["sell_fee"] < PROMO_FEE_PCT:
-            hits.append((atm_id, f))
-    was_active = bool(state.get("promo_active"))
-    state["promo_active"] = bool(hits)
-    if hits and not was_active:
-        names = ", ".join(ATM_SHORT.get(a, str(a)) for a, _ in hits)
-        f = hits[0][1]
-        return (f"🎉 **PROMOCJA!** Prowizja sprzedaży USDC spadła do {fmt_pct(f['sell_fee'])} "
-                f"(skup {fmt_rate(f['sell'])}, rynek {fmt_rate(f['market'])}).\n"
-                f"Dotyczy: {names}")
-    if was_active and not hits:
-        log.info("Promocja zakończona — prowizja wróciła do normy.")
-    return None
+def fee_message(state: dict, watched: dict, market: dict) -> tuple[str | None, str | None]:
+    """Zwraca (alert głośny, komunikat cichy).
+    Głośny: prowizja sprzedaży FEE_COIN spadła do/poniżej progu z FEE_ALERT_LEVELS,
+    którego jeszcze nie zgłoszono w tym epizodzie. Cichy: prowizja wróciła powyżej
+    najwyższego progu (+ histereza) — okno "warto sprzedawać" się zamknęło."""
+    f = current_fees(watched, market)
+    row = f.get(FEE_COIN) or {}
+    fee = row.get("sell_fee")
+    if fee is None:
+        return None, None
+
+    active = {float(x) for x in state.get("fee_levels_active", [])}
+    newly, closed = [], []
+    for lvl in FEE_ALERT_LEVELS:
+        if fee <= lvl and lvl not in active:
+            active.add(lvl)
+            newly.append(lvl)
+        elif fee > lvl + FEE_HYSTERESIS and lvl in active:
+            active.discard(lvl)
+            closed.append(lvl)
+    state["fee_levels_active"] = sorted(active)
+    state["fee_last"] = round(fee, 2)
+
+    if newly:
+        lvl = min(newly)
+        head = "🔥 **BARDZO NISKA PROWIZJA**" if lvl < max(FEE_ALERT_LEVELS) else "💸 **WARTO SPRZEDAWAĆ**"
+        lines = [f"{head} — prowizja sprzedaży {FEE_COIN}: {fmt_pct(fee)} (próg {fmt_pct(lvl)})",
+                 f"📉 Skup {FEE_COIN}: {fmt_rate(row.get('sell'))} • rynek {fmt_rate(row.get('market'))}"
+                 f" ({market.get('_src', '?')})"]
+        other = "USDT" if FEE_COIN == "USDC" else "USDC"
+        o = f.get(other) or {}
+        if o.get("sell_fee") is not None:
+            lines.append(f"   {other}: {fmt_pct(o['sell_fee'])} (skup {fmt_rate(o.get('sell'))})")
+        rng = fee_range_line(STATS_DAYS)
+        if rng:
+            lines.append(rng)
+        cash = " • ".join(
+            f"{badge(i)} {ATM_SHORT.get(a, a)}: {fmt_pln(extract_state(watched.get(a))['pln'])}"
+            for i, a in enumerate(ATM_IDS))
+        lines.append(f"💵 Gotówka: {cash}")
+        if all((extract_state(watched.get(a))["pln"] or 0) <= 0 for a in ATM_IDS):
+            lines.append("   (maszyny puste — wypłata po najbliższym zasileniu)")
+        lines.append(f"🔗 {ATM_URLS.get(ATM_IDS[0], 'https://www.bitomat.com')}")
+        return "\n".join(lines), None
+
+    if closed and max(FEE_ALERT_LEVELS) in closed:
+        return None, (f"ℹ️ Prowizja sprzedaży {FEE_COIN} wzrosła do {fmt_pct(fee)} — "
+                      f"okno ≤{fmt_pct(max(FEE_ALERT_LEVELS))} zamknięte.")
+    if closed:
+        log.info("Prowizja %s wzrosła do %s — poziom %s odwołany.", FEE_COIN, fmt_pct(fee), closed)
+    return None, None
 
 
 def check_once() -> None:
@@ -614,16 +720,17 @@ def check_once() -> None:
         )
         messages.append(f"📊 Stan wszystkich: {summary}")
 
-    promo = promo_message(state, watched, market)
-    if promo:
-        messages.append(promo)
-
+    fee_loud, fee_quiet = fee_message(state, watched, market)
     brief = daily_brief(state, watched, market)
 
     if messages:
         notify("\n\n".join(messages))
     else:
         log.info("Brak zmian.")
+    if fee_loud:
+        notify(fee_loud, silent=is_quiet_hour(ts))   # w nocy po cichu (FEE_QUIET_HOURS)
+    if fee_quiet:
+        notify(fee_quiet, silent=True)
     if brief:
         notify(brief, silent=DAILY_BRIEF_SILENT)
     save_state(state)
@@ -650,6 +757,9 @@ def print_stats(days: int) -> None:
     print(f"Statystyki z ostatnich {days} dni:")
     for line in stats_lines(stats, days):
         print(" ", line)
+    rng = fee_range_line(days)
+    if rng:
+        print(" ", rng)
     for i, atm_id in enumerate(ATM_IDS):
         s = stats.get(atm_id)
         if s and s["refills_all"]:
