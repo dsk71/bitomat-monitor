@@ -14444,3 +14444,6 @@ timestamp,atm_id,miejsce,pln,gotowka_dostepna,online
 2026-10-20 19:50:29,867,"Wrocław, Kleczkowska 5",55000.0,1,1
 2026-10-20 19:50:29,1186,"Wrocław, Kuźnicza 31",53750.0,1,1
 2026-10-20 19:50:29,1764,"Wrocław, Czekoladowa 7-9 Aleja Bielany",49700.0,1,1
+2026-10-20 20:01:04,867,"Wrocław, Kleczkowska 5",55000.0,1,1
+2026-10-20 20:01:04,1186,"Wrocław, Kuźnicza 31",49250.0,1,1
+2026-10-20 20:01:04,1764,"Wrocław, Czekoladowa 7-9 Aleja Bielany",49700.0,1,1
