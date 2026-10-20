@@ -16,9 +16,9 @@
     },
     "1764": {
       "online": true,
-      "pln": 38600.0,
+      "pln": 37800.0,
       "cash_available": true,
-      "since": "2026-10-19T23:10:25.586898+02:00",
+      "since": "2026-10-20T13:10:27.338354+02:00",
       "low_alerted": false
     }
   },
@@ -27,5 +27,5 @@
   "promo_active": false,
   "last_brief": "2026-10-20",
   "fee_levels_active": [],
-  "fee_last": 5.47
+  "fee_last": 5.48
 }
