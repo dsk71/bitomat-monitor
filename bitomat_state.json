@@ -2,23 +2,23 @@
   "atms": {
     "867": {
       "online": true,
-      "pln": 30150.0,
+      "pln": 21600.0,
       "cash_available": true,
-      "since": "2026-10-21T18:20:31.211400+02:00",
+      "since": "2026-10-21T19:40:29.784528+02:00",
       "low_alerted": false
     },
     "1186": {
-      "online": true,
+      "online": false,
       "pln": 14850.0,
       "cash_available": true,
-      "since": "2026-10-21T18:30:53.822683+02:00",
+      "since": "2026-10-21T19:40:29.784528+02:00",
       "low_alerted": false
     },
     "1764": {
-      "online": false,
+      "online": true,
       "pln": 28700.0,
       "cash_available": true,
-      "since": "2026-10-21T19:30:52.706980+02:00",
+      "since": "2026-10-21T19:40:29.784528+02:00",
       "low_alerted": false
     }
   },
@@ -29,5 +29,5 @@
   "fee_levels_active": [
     5.0
   ],
-  "fee_last": 3.58
+  "fee_last": 3.61
 }
