@@ -25,9 +25,9 @@
   "api_fail_count": 0,
   "last_heartbeat": "2026-09-22",
   "promo_active": false,
-  "last_brief": "2026-10-22",
+  "last_brief": "2026-10-23",
   "fee_levels_active": [
     5.0
   ],
-  "fee_last": 3.48
+  "fee_last": 3.35
 }
