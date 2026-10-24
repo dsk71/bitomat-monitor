@@ -16,10 +16,10 @@
     },
     "1764": {
       "online": true,
-      "pln": 200.0,
-      "cash_available": true,
-      "since": "2026-10-23T20:01:04.900913+02:00",
-      "low_alerted": true
+      "pln": 0.0,
+      "cash_available": false,
+      "since": "2026-10-24T15:01:00.720161+02:00",
+      "low_alerted": false
     }
   },
   "api_fail_count": 0,
