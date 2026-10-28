@@ -16,10 +16,10 @@
     },
     "1764": {
       "online": true,
-      "pln": 21550.0,
+      "pln": 3550.0,
       "cash_available": true,
-      "since": "2026-10-28T08:30:53.319082+01:00",
-      "low_alerted": false
+      "since": "2026-10-28T08:40:30.181033+01:00",
+      "low_alerted": true
     }
   },
   "api_fail_count": 0,
@@ -30,5 +30,5 @@
     2.5,
     5.0
   ],
-  "fee_last": 2.51
+  "fee_last": 2.54
 }
