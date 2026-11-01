@@ -9,10 +9,10 @@
     },
     "1186": {
       "online": true,
-      "pln": 10750.0,
+      "pln": 8750.0,
       "cash_available": true,
-      "since": "2026-11-01T20:50:29.620870+01:00",
-      "low_alerted": false
+      "since": "2026-11-01T21:01:00.936768+01:00",
+      "low_alerted": true
     },
     "1764": {
       "online": true,
