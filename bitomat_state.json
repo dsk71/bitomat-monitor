@@ -22,10 +22,10 @@
       "low_alerted": false
     }
   },
-  "api_fail_count": 2,
+  "api_fail_count": 0,
   "last_heartbeat": "2026-09-22",
   "promo_active": false,
   "last_brief": "2026-11-02",
   "fee_levels_active": [],
-  "fee_last": 7.04
+  "fee_last": 7.03
 }
