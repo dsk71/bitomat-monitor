@@ -2,10 +2,10 @@
   "atms": {
     "867": {
       "online": true,
-      "pln": 11550.0,
+      "pln": 8850.0,
       "cash_available": true,
-      "since": "2026-11-08T18:10:30.015621+01:00",
-      "low_alerted": false
+      "since": "2026-11-08T18:50:28.669414+01:00",
+      "low_alerted": true
     },
     "1186": {
       "online": true,
@@ -27,5 +27,5 @@
   "promo_active": false,
   "last_brief": "2026-11-08",
   "fee_levels_active": [],
-  "fee_last": 8.86
+  "fee_last": 8.87
 }
