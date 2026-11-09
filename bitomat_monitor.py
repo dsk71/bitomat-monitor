@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bitomat Monitor v6 — Wrocław
+Bitomat Monitor v8 — Wrocław
 ============================
 Monitoruje stan gotówki (PLN) w wybranych bitomatach sieci Shitcoins Club
 (bitomat.com) i wysyła powiadomienia na Telegrama i/lub Discorda.
@@ -18,6 +18,10 @@ Funkcje:
   • "WARTO SPRZEDAWAĆ" — alert, gdy efektywna prowizja sprzedaży USDC spadnie do
     5% (💸) lub 2,5% (🔥), niezależnie od stanu gotówki; cichy sygnał, gdy okno się
     zamknie; werdykt + zakres z 7 dni w porannym raporcie.
+  • v7: 🔔 wczesne ostrzeżenie (pierwszy krok prowizji w dół z ~8,5%), ⏰ "okno się
+    zamyka" (prowizja rośnie w trakcie okna ≤5%), 💰 kalkulator "ile zł za X USDC",
+    🎯/⛔ ocena prowizji w alertach o zasileniu, 📅 "ostatnio ≤5%" w raporcie.
+  • v8: komendy Telegrama /stan, /raport, /pomoc (odpowiedź przy najbliższym pomiarze).
   • Historia pomiarów (bitomat_history.csv) i prowizji (bitomat_fees.csv).
   • Ostrzeżenie po serii nieudanych pobrań API; ciche komunikaty serwisowe.
 
@@ -101,6 +105,24 @@ FEE_ALERT_LEVELS = [5.0, 2.5]
 FEE_HYSTERESIS = 0.5             # próg "odwołuje się" dopiero, gdy prowizja wzrośnie o tyle p.p. ponad niego
 FEE_QUIET_HOURS = (23, 8)        # w tych godzinach (czas PL) alert o prowizji przychodzi PO CICHU; None = zawsze głośno
 
+# WCZESNE OSTRZEŻENIE 🔔: prowizja była >= pierwszej wartości (drogo), a potem spadła
+# poniżej drugiej. W danych wrz–lis 2026 pierwszy krok z ~8,5% w dół poprzedzał okno
+# ≤5% o 2–8 dni. None = wyłączone.
+EARLY_WARN = (8.0, 7.0)
+
+# OKNO SIĘ ZAMYKA ⏰: w trakcie okna ≤5% prowizja wzrosła o tyle p.p. ponad najniższą
+# wartość w tym oknie. W danych dawało to 9–16 h zapasu przed końcem okna. None = wyłączone.
+CLOSE_WARN_RISE = 1.0
+
+# KALKULATOR 💰: ile zł dostaniesz za tyle monet FEE_COIN (w alertach i raporcie). None = wyłączony.
+SELL_AMOUNT = 1000
+
+# KOMENDY TELEGRAMA: bot odpowiada na /stan, /raport, /pomoc — sprawdza wiadomości przy
+# każdym pomiarze, więc odpowiedź przychodzi z opóźnieniem do ~10 min. Odpowiada WYŁĄCZNIE
+# na czat TELEGRAM_CHAT_ID (wiadomości od innych osób są ignorowane). False = wyłączone.
+TELEGRAM_COMMANDS = True
+COMMAND_MAX_AGE_H = 3            # starszych komend nie wykonuje (np. po dłuższej awarii GitHuba)
+
 # Po ilu NIEUDANYCH pobraniach API z rzędu wysłać ostrzeżenie o awarii monitora
 API_FAIL_ALERT_AFTER = 5
 
@@ -126,7 +148,7 @@ logging.basicConfig(
 log = logging.getLogger("bitomat")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BitomatMonitor/6.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BitomatMonitor/8.0",
     "Accept": "application/json",
 }
 PL_WEEKDAYS = ["pn", "wt", "śr", "cz", "pt", "so", "nd"]
@@ -314,14 +336,17 @@ def send_discord(text: str, silent: bool = False) -> None:
         log.error("Błąd wysyłki na Discorda: %s", _redact(str(e)))
 
 
-def send_telegram(text: str, silent: bool = False) -> None:
+def send_telegram(text: str, silent: bool = False, reply_to: int | None = None) -> None:
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         return
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text.replace("**", ""),
+               "disable_web_page_preview": True, "disable_notification": silent}
+    if reply_to:
+        payload["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
     try:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text.replace("**", ""),
-                  "disable_web_page_preview": True, "disable_notification": silent},
+            json=payload,
             timeout=15,
         ).raise_for_status()
         log.info("Wysłano powiadomienie na Telegrama%s.", " (cicho)" if silent else "")
@@ -358,6 +383,11 @@ def build_atm_message(label: str, old: dict, new: dict, atm: dict | None,
                 lines.append(f"⏳ Pusto było przez: {dur}")
         else:
             lines.append(f"🚨 **DOSYPKA: +{fmt_pln(new_pln - old_pln)} → saldo {fmt_pln(new_pln)}**")
+        cur = (f.get(FEE_COIN) or {}).get("sell_fee")
+        if cur is not None and cur <= max(FEE_ALERT_LEVELS):
+            lines.append(f"🎯 **Prowizja niska ({fmt_pct(cur)}) — dobry moment na sprzedaż!**")
+        elif cur is not None:
+            lines.append(f"⛔ Prowizja wysoka ({fmt_pct(cur)}) — opłaca się tylko przy pilnej sprzedaży.")
         lines.extend(fee_lines(f))
         eq = [f"{new_pln / r['sell']:,.0f} {sym}".replace(",", " ")
               for sym, r in f.items() if r.get("sell")]
@@ -517,7 +547,7 @@ def fee_history_stats(days: int) -> dict | None:
                 ts = datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
             except (KeyError, ValueError):
                 continue
-            if ts < cutoff or r["timestamp"] in seen or r.get(col) in (None, ""):
+            if ts < cutoff or ts > now_local() or r["timestamp"] in seen or r.get(col) in (None, ""):
                 continue
             seen.add(r["timestamp"])
             try:
@@ -528,6 +558,44 @@ def fee_history_stats(days: int) -> dict | None:
         return None
     vals.sort()
     return {"min": vals[0], "max": vals[-1], "median": vals[len(vals) // 2], "n": len(vals)}
+
+
+def last_fee_below(threshold: float) -> datetime | None:
+    """Ostatni pomiar z bitomat_fees.csv, w którym prowizja sprzedaży FEE_COIN była <= progu."""
+    if not FEES_FILE.exists():
+        return None
+    col = f"{FEE_COIN.lower()}_prow_sprzedaz_pct"
+    last, now = None, now_local()
+    with FEES_FILE.open(encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            try:
+                if float(r[col]) <= threshold:
+                    ts = datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+                    if ts <= now:
+                        last = ts
+            except (KeyError, ValueError, TypeError):
+                continue
+    return last
+
+
+def value_line(row: dict, fs: dict | None) -> str | None:
+    """💰 Ile zł za SELL_AMOUNT monet teraz + porównanie z drugim skrajem z ostatnich dni."""
+    if not SELL_AMOUNT or not row.get("sell"):
+        return None
+    amt = f"{SELL_AMOUNT:,.0f}".replace(",", " ")
+    now_v = SELL_AMOUNT * row["sell"]
+    s = f"💰 Za {amt} {FEE_COIN}: ≈ {fmt_pln(now_v)}"
+    mk, fee = row.get("market"), row.get("sell_fee")
+    if fs and mk and fee is not None:
+        if fee - fs["min"] >= 0.5:
+            best = SELL_AMOUNT * mk * (1 - fs["min"] / 100)
+            s += (f" (przy najniższej prowizji z {STATS_DAYS} dni, {fmt_pct(fs['min'])}: "
+                  f"{fmt_pln(best)} → {fmt_pln(best - now_v)} więcej)")
+        elif fs["max"] - fee >= 0.5:
+            worst = SELL_AMOUNT * mk * (1 - fs["max"] / 100)
+            s += (f" (przy {fmt_pct(fs['max'])} z ostatnich {STATS_DAYS} dni: "
+                  f"{fmt_pln(worst)} → zyskujesz {fmt_pln(now_v - worst)})")
+    return s
 
 
 def fee_range_line(days: int) -> str | None:
@@ -577,8 +645,13 @@ def daily_brief(state: dict, watched: dict, market: dict) -> str | None:
     if now.hour < DAILY_BRIEF_HOUR or state.get("last_brief") == today:
         return None
     state["last_brief"] = today
+    return report_text(state, watched, market, f"☀️ Raport bitomatów — {fmt_when(now)}", with_stats=True)
 
-    lines = [f"☀️ Raport bitomatów — {fmt_when(now)}", ""]
+
+def report_text(state: dict, watched: dict, market: dict, title: str, with_stats: bool) -> str:
+    """Treść raportu: stan maszyn, prowizje, werdykt, kalkulator, okno ≤5%, (opcjonalnie) statystyki."""
+    now = now_local()
+    lines = [title, ""]
     for i, atm_id in enumerate(ATM_IDS):
         atm = watched.get(atm_id)
         st = extract_state(atm)
@@ -596,12 +669,30 @@ def daily_brief(state: dict, watched: dict, market: dict) -> str | None:
             if market:
                 lines.append(f"📈 Rynek: USDC {fmt_rate(market.get('USDC'))} • "
                              f"USDT {fmt_rate(market.get('USDT'))} ({market.get('_src')})")
-            lines.append(fee_verdict((f.get(FEE_COIN) or {}).get("sell_fee")))
+            row = f.get(FEE_COIN) or {}
+            lines.append(fee_verdict(row.get("sell_fee")))
             rng = fee_range_line(STATS_DAYS)
             if rng:
                 lines.append(rng)
+            val = value_line(row, fee_history_stats(STATS_DAYS))
+            if val:
+                lines.append(val)
+            top = max(FEE_ALERT_LEVELS)
+            if top in [float(x) for x in state.get("fee_levels_active", [])] and state.get("fee_window_start"):
+                start = datetime.fromisoformat(state["fee_window_start"])
+                lines.append(f"📅 Okno ≤{fmt_pct(top)} trwa od {fmt_when(start)} "
+                             f"({fmt_duration(state['fee_window_start']) or 'chwilę'})")
+            else:
+                last = last_fee_below(top)
+                if last:
+                    ago = (now - last).total_seconds() / 86400
+                    lines.append(f"📅 Ostatnio ≤{fmt_pct(top)}: {fmt_when(last)} ({fmt_days(ago)} temu)")
             break
 
+    if not with_stats:
+        if EARLY_WARN and state.get("fee_armed"):
+            lines.append(f"🔔 Czekam na pierwszy krok prowizji w dół (poniżej {fmt_pct(EARLY_WARN[1])})")
+        return "\n".join(lines)
     stats = history_stats(STATS_DAYS)
     if stats:
         lines.append("")
@@ -610,17 +701,102 @@ def daily_brief(state: dict, watched: dict, market: dict) -> str | None:
     return "\n".join(lines)
 
 
+# ─────────────────────────── Komendy Telegrama ─────────────────────────────
+
+BOT_COMMANDS = [
+    ("stan", "Aktualna gotówka w bitomatach i prowizja"),
+    ("raport", "Pełny raport ze statystykami z 7 dni"),
+    ("pomoc", "Lista komend"),
+]
+HELP_TEXT = ("🤖 Komendy:\n"
+             "/stan — gotówka w maszynach, prowizja, ile zł za USDC\n"
+             "/raport — to samo + statystyki zasileń z 7 dni\n"
+             "/pomoc — ta lista\n\n"
+             "Sprawdzam wiadomości przy każdym pomiarze (co ~10 min), więc odpowiedź "
+             "może przyjść z kilkuminutowym opóźnieniem.")
+
+
+def tg_api(method: str, **params) -> dict | None:
+    """Wywołanie Bot API; zwraca 'result' albo None (błędy tylko w logu, z ukrytym tokenem)."""
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}",
+                          json=params, timeout=20)
+        data = r.json()
+        if not data.get("ok"):
+            log.warning("Telegram %s: %s", method, _redact(str(data.get("description"))))
+            return None
+        return data.get("result")
+    except Exception as e:
+        log.warning("Telegram %s: %s", method, _redact(str(e)))
+        return None
+
+
+def handle_telegram_commands(state: dict, watched: dict | None, market: dict) -> None:
+    """Odbiera wiadomości wysłane do bota od ostatniego pomiaru i odpowiada na komendy.
+    watched=None oznacza, że API bitomatów jest niedostępne."""
+    if not (TELEGRAM_COMMANDS and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+        return
+    # jednorazowo: zarejestruj komendy, żeby pojawiły się w menu „/” w Telegramie
+    cmd_ver = "|".join(c for c, _ in BOT_COMMANDS)
+    if state.get("tg_commands") != cmd_ver:
+        if tg_api("setMyCommands", commands=[{"command": c, "description": d} for c, d in BOT_COMMANDS]) is not None:
+            state["tg_commands"] = cmd_ver
+
+    offset = int(state.get("tg_offset", 0))
+    updates = tg_api("getUpdates", offset=offset, timeout=0, allowed_updates=["message"])
+    if not updates:
+        return
+    now = now_local()
+    for u in updates:
+        offset = max(offset, int(u["update_id"]) + 1)
+        msg = u.get("message") or {}
+        if str((msg.get("chat") or {}).get("id")) != str(TELEGRAM_CHAT_ID):
+            log.info("Pomijam wiadomość z obcego czatu.")
+            continue
+        text = (msg.get("text") or "").strip()
+        cmd = text.split()[0].split("@")[0].lower().lstrip("/") if text.startswith("/") else ""
+        if not cmd:
+            continue
+        age_h = (now.timestamp() - int(msg.get("date", 0))) / 3600
+        if age_h > COMMAND_MAX_AGE_H:
+            log.info("Pomijam starą komendę /%s (%.1f h).", cmd, age_h)
+            continue
+        if cmd in ("stan", "status"):
+            reply = (report_text(state, watched, market, f"📍 Stan — {fmt_when(now)}", with_stats=False)
+                     if watched is not None else None)
+        elif cmd == "raport":
+            reply = (report_text(state, watched, market, f"📋 Raport — {fmt_when(now)}", with_stats=True)
+                     if watched is not None else None)
+        elif cmd in ("pomoc", "help", "start"):
+            reply = HELP_TEXT
+        else:
+            reply = f"❔ Nie znam komendy /{cmd}.\n\n{HELP_TEXT}"
+        if reply is None:
+            reply = "⚠️ Nie mogę teraz pobrać danych z API bitomatów — spróbuj za kilkanaście minut."
+        log.info("Odpowiadam na /%s.", cmd)
+        send_telegram(reply, reply_to=msg.get("message_id"))
+    state["tg_offset"] = offset
+    # potwierdź odebrane wiadomości po stronie Telegrama od razu — nawet gdyby zapis stanu
+    # do repo się nie udał, ta sama komenda nie zostanie obsłużona dwa razy
+    tg_api("getUpdates", offset=offset, timeout=0, limit=1, allowed_updates=["message"])
+
+
 def fee_message(state: dict, watched: dict, market: dict) -> tuple[str | None, str | None]:
-    """Zwraca (alert głośny, komunikat cichy).
-    Głośny: prowizja sprzedaży FEE_COIN spadła do/poniżej progu z FEE_ALERT_LEVELS,
-    którego jeszcze nie zgłoszono w tym epizodzie. Cichy: prowizja wróciła powyżej
-    najwyższego progu (+ histereza) — okno "warto sprzedawać" się zamknęło."""
+    """Zwraca (alerty głośne, komunikaty ciche) dotyczące prowizji sprzedaży FEE_COIN:
+      💸/🔥 spadek do/poniżej progów FEE_ALERT_LEVELS (raz na epizod, z histerezą),
+      ⏰ okno ≤5% się zamyka (wzrost o CLOSE_WARN_RISE ponad minimum okna),
+      🔔 wczesne ostrzeżenie (spadek z drogiego poziomu, EARLY_WARN),
+      ℹ️ (cicho) okno zamknięte."""
     f = current_fees(watched, market)
     row = f.get(FEE_COIN) or {}
     fee = row.get("sell_fee")
     if fee is None:
         return None, None
+    now = now_local()
+    top = max(FEE_ALERT_LEVELS)
+    loud, quiet = [], []
 
+    # ── progi 5% / 2,5% ──
     active = {float(x) for x in state.get("fee_levels_active", [])}
     newly, closed = [], []
     for lvl in FEE_ALERT_LEVELS:
@@ -633,9 +809,14 @@ def fee_message(state: dict, watched: dict, market: dict) -> tuple[str | None, s
     state["fee_levels_active"] = sorted(active)
     state["fee_last"] = round(fee, 2)
 
+    if top in newly:                       # otwiera się nowe okno ≤5%
+        state["fee_window_start"] = now.isoformat()
+        state["fee_window_min"] = fee
+        state["fee_close_warned"] = False
+
     if newly:
         lvl = min(newly)
-        head = "🔥 **BARDZO NISKA PROWIZJA**" if lvl < max(FEE_ALERT_LEVELS) else "💸 **WARTO SPRZEDAWAĆ**"
+        head = "🔥 **BARDZO NISKA PROWIZJA**" if lvl < top else "💸 **WARTO SPRZEDAWAĆ**"
         lines = [f"{head} — prowizja sprzedaży {FEE_COIN}: {fmt_pct(fee)} (próg {fmt_pct(lvl)})",
                  f"📉 Skup {FEE_COIN}: {fmt_rate(row.get('sell'))} • rynek {fmt_rate(row.get('market'))}"
                  f" ({market.get('_src', '?')})"]
@@ -643,24 +824,68 @@ def fee_message(state: dict, watched: dict, market: dict) -> tuple[str | None, s
         o = f.get(other) or {}
         if o.get("sell_fee") is not None:
             lines.append(f"   {other}: {fmt_pct(o['sell_fee'])} (skup {fmt_rate(o.get('sell'))})")
+        fs = fee_history_stats(STATS_DAYS)
         rng = fee_range_line(STATS_DAYS)
         if rng:
             lines.append(rng)
+        val = value_line(row, fs)
+        if val:
+            lines.append(val)
         cash = " • ".join(
             f"{badge(i)} {ATM_SHORT.get(a, a)}: {fmt_pln(extract_state(watched.get(a))['pln'])}"
             for i, a in enumerate(ATM_IDS))
         lines.append(f"💵 Gotówka: {cash}")
-        if all((extract_state(watched.get(a))["pln"] or 0) <= 0 for a in ATM_IDS):
+        ready = [(i, a) for i, a in enumerate(ATM_IDS)
+                 if (extract_state(watched.get(a))["pln"] or 0) >= ATM_LOW_CASH.get(a, LOW_CASH)]
+        if ready:
+            i, a = ready[0]
+            lines.append(f"🎯 **Gotówka jest — można jechać: {badge(i)} {ATM_SHORT.get(a, a)} "
+                         f"({fmt_pln(extract_state(watched.get(a))['pln'])})**")
+        elif all((extract_state(watched.get(a))["pln"] or 0) <= 0 for a in ATM_IDS):
             lines.append("   (maszyny puste — wypłata po najbliższym zasileniu)")
         lines.append(f"🔗 {ATM_URLS.get(ATM_IDS[0], 'https://www.bitomat.com')}")
-        return "\n".join(lines), None
+        loud.append("\n".join(lines))
 
-    if closed and max(FEE_ALERT_LEVELS) in closed:
-        return None, (f"ℹ️ Prowizja sprzedaży {FEE_COIN} wzrosła do {fmt_pct(fee)} — "
-                      f"okno ≤{fmt_pct(max(FEE_ALERT_LEVELS))} zamknięte.")
-    if closed:
+    # ── ⏰ okno się zamyka (prowizja rośnie w trakcie okna) ──
+    if CLOSE_WARN_RISE and top in active and top not in newly:
+        mn = state.get("fee_window_min")
+        mn = fee if mn is None else min(float(mn), fee)
+        if state.get("fee_close_warned"):
+            # wzrost się cofnął o co najmniej tyle samo → uzbrój ponownie, liczymy minimum od nowa
+            if fee <= float(state.get("fee_close_warn_fee", fee)) - CLOSE_WARN_RISE:
+                state["fee_close_warned"] = False
+                mn = fee
+        elif fee >= mn + CLOSE_WARN_RISE:
+            state["fee_close_warned"] = True
+            state["fee_close_warn_fee"] = fee
+            msg = [f"⏰ **Prowizja rośnie — okno się zamyka**: {FEE_COIN} {fmt_pct(mn)} → {fmt_pct(fee)}",
+                   f"Jeśli planujesz sprzedaż, to raczej teraz niż za kilka godzin."]
+            val = value_line(row, None)
+            if val:
+                msg.append(val)
+            loud.append("\n".join(msg))
+        state["fee_window_min"] = mn
+
+    if top in closed:
+        state["fee_window_min"] = None
+        state["fee_close_warned"] = False
+        quiet.append(f"ℹ️ Prowizja sprzedaży {FEE_COIN} wzrosła do {fmt_pct(fee)} — "
+                     f"okno ≤{fmt_pct(top)} zamknięte.")
+    elif closed:
         log.info("Prowizja %s wzrosła do %s — poziom %s odwołany.", FEE_COIN, fmt_pct(fee), closed)
-    return None, None
+
+    # ── 🔔 wczesne ostrzeżenie (pierwszy krok w dół z drogiego poziomu) ──
+    if EARLY_WARN:
+        arm, trigger = EARLY_WARN
+        if fee >= arm:
+            state["fee_armed"] = True
+        elif state.get("fee_armed") and fee < trigger:
+            state["fee_armed"] = False
+            if fee > top:                  # gdy od razu ≤5%, wystarczy alert progowy
+                loud.append(f"🔔 **Prowizja zaczyna spadać**: {FEE_COIN} {fmt_pct(fee)} (wcześniej ≥{fmt_pct(arm)}).\n"
+                            f"Zwykle to pierwszy krok w stronę okna ≤{fmt_pct(top)} — dam znać, gdy tam dojdzie.")
+
+    return ("\n\n".join(loud) if loud else None), ("\n\n".join(quiet) if quiet else None)
 
 
 def check_once() -> None:
@@ -674,6 +899,7 @@ def check_once() -> None:
         if fails == API_FAIL_ALERT_AFTER:
             notify(f"⚠️ Monitor od {fails} sprawdzeń z rzędu nie może pobrać danych z API "
                    f"bitomatów.\nOstatni błąd: {e}\nPróbuję dalej — dam znać, gdy wróci.")
+        handle_telegram_commands(state, None, {})
         save_state(state)
         return
     if int(state.get("api_fail_count", 0)) >= API_FAIL_ALERT_AFTER:
@@ -733,6 +959,7 @@ def check_once() -> None:
         notify(fee_quiet, silent=True)
     if brief:
         notify(brief, silent=DAILY_BRIEF_SILENT)
+    handle_telegram_commands(state, watched, market)
     save_state(state)
 
 
@@ -760,6 +987,9 @@ def print_stats(days: int) -> None:
     rng = fee_range_line(days)
     if rng:
         print(" ", rng)
+    last = last_fee_below(max(FEE_ALERT_LEVELS))
+    if last:
+        print(f"  📅 Ostatnio ≤{fmt_pct(max(FEE_ALERT_LEVELS))}: {fmt_when(last)}")
     for i, atm_id in enumerate(ATM_IDS):
         s = stats.get(atm_id)
         if s and s["refills_all"]:
