@@ -29,7 +29,7 @@
   "fee_levels_active": [
     5.0
   ],
-  "fee_last": 3.29,
+  "fee_last": 3.3,
   "fee_armed": false,
   "tg_commands": "stan|raport|pomoc",
   "tg_offset": 286049763,
