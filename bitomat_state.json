@@ -34,6 +34,6 @@
   "tg_commands": "stan|raport|pomoc",
   "tg_offset": 286049762,
   "fee_window_start": "2026-11-14T18:30:48.061579+01:00",
-  "fee_window_min": 4.564999999999997,
+  "fee_window_min": 4.559999999999997,
   "fee_close_warned": false
 }
