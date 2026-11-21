@@ -30,11 +30,11 @@
     2.5,
     5.0
   ],
-  "fee_last": 1.78,
+  "fee_last": 1.76,
   "fee_armed": false,
   "tg_commands": "stan|raport|pomoc",
   "tg_offset": 286049766,
   "fee_window_start": "2026-11-14T18:30:48.061579+01:00",
-  "fee_window_min": 1.7758620689655131,
+  "fee_window_min": 1.7610837438423514,
   "fee_close_warned": false
 }
