@@ -9,10 +9,10 @@
     },
     "1186": {
       "online": true,
-      "pln": 800.0,
-      "cash_available": true,
-      "since": "2026-11-22T16:01:10.356747+01:00",
-      "low_alerted": true
+      "pln": 0.0,
+      "cash_available": false,
+      "since": "2026-11-23T08:40:33.634110+01:00",
+      "low_alerted": false
     },
     "1764": {
       "online": true,
@@ -30,7 +30,7 @@
     2.5,
     5.0
   ],
-  "fee_last": 2.21,
+  "fee_last": 2.27,
   "fee_armed": false,
   "tg_commands": "stan|raport|pomoc",
   "tg_offset": 286049766,
