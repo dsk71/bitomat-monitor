@@ -9,16 +9,16 @@
     },
     "1186": {
       "online": true,
-      "pln": 34650.0,
+      "pln": 34350.0,
       "cash_available": true,
-      "since": "2026-11-24T21:10:33.851570+01:00",
+      "since": "2026-11-24T22:01:10.864638+01:00",
       "low_alerted": false
     },
     "1764": {
       "online": true,
-      "pln": 0.0,
-      "cash_available": false,
-      "since": "2026-11-24T21:50:36.974210+01:00",
+      "pln": 35400.0,
+      "cash_available": true,
+      "since": "2026-11-24T22:01:10.864638+01:00",
       "low_alerted": false
     }
   },
@@ -30,7 +30,7 @@
     2.5,
     5.0
   ],
-  "fee_last": 2.04,
+  "fee_last": 2.28,
   "fee_armed": false,
   "tg_commands": "stan|raport|pomoc",
   "tg_offset": 286049766,
