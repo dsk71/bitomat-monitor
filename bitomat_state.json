@@ -2,9 +2,9 @@
   "atms": {
     "867": {
       "online": true,
-      "pln": 3650.0,
+      "pln": 750.0,
       "cash_available": true,
-      "since": "2026-11-25T15:01:06.566475+01:00",
+      "since": "2026-11-25T16:01:10.940775+01:00",
       "low_alerted": true
     },
     "1186": {
@@ -30,7 +30,7 @@
     2.5,
     5.0
   ],
-  "fee_last": 2.23,
+  "fee_last": 2.2,
   "fee_armed": false,
   "tg_commands": "stan|raport|pomoc",
   "tg_offset": 286049766,
