@@ -2,10 +2,10 @@
   "atms": {
     "867": {
       "online": true,
-      "pln": 11300.0,
+      "pln": 7300.0,
       "cash_available": true,
-      "since": "2026-11-26T23:10:34.886759+01:00",
-      "low_alerted": false
+      "since": "2026-11-26T23:30:52.003496+01:00",
+      "low_alerted": true
     },
     "1186": {
       "online": true,
